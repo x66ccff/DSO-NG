@@ -438,7 +438,161 @@ class Program(object):
                     return y, invalid, error_node, error_type
 
             Program.execute_function = unsafe_execute
+
+    @classmethod
+    def from_bracket_string(cls, expr_str):
+        def _get_token_index(token_name):
+            try:
+                return Program.library.names.index(token_name.lower())
+            except ValueError:
+                raise ValueError(f"Token {token_name} not found in library")
+        
+        def _is_number(s):
+            try:
+                float(s)
+                return True
+            except ValueError:
+                return False
+        
+        def _tokenize(s):
+            # 检查是否支持const
+            has_const = 'const' in Program.library.names
+            
+            # 预处理运算符
+            s = s.replace('+', ' add ').replace('-', ' sub ') \
+                .replace('*', ' mul ').replace('/', ' div ')
+            s = s.replace('(', ' ( ').replace(')', ' ) ')
+            
+            tokens = []
+            current_token = ''
+            i = 0
+            while i < len(s):
+                if s[i].isspace():
+                    if current_token:
+                        tokens.append(current_token)
+                        current_token = ''
+                elif s[i] == 'x' and i + 1 < len(s) and s[i+1].isdigit():
+                    # 处理x1, x2等变量
+                    current_token = 'x' + s[i+1]
+                    tokens.append(current_token)
+                    current_token = ''
+                    i += 1  # 跳过数字
+                else:
+                    current_token += s[i]
+                i += 1
                 
+            if current_token:
+                tokens.append(current_token)
+            
+            # 过滤空tokens并进行检查
+            result = []
+            for token in tokens:
+                token = token.strip()
+                if not token:
+                    continue
+                    
+                if token == 'x':
+                    raise ValueError("Ambiguous variable 'x' found. Please use x1, x2, etc.")
+                    
+                if _is_number(token):
+                    if not has_const:
+                        raise ValueError("Constants are not supported in current library")
+                    result.append('const')
+                else:
+                    result.append(token)
+                    
+            return result
+
+        def _parse(tokens):
+            output = []
+            operator_stack = []
+            operand_stack = []
+            
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                
+                if token == '(':
+                    operator_stack.append(token)
+                elif token == ')':
+                    while operator_stack and operator_stack[-1] != '(':
+                        op = operator_stack.pop()
+                        if op in ['add', 'sub', 'mul', 'div']:
+                            if len(operand_stack) >= 2:
+                                right = operand_stack.pop()
+                                left = operand_stack.pop()
+                                result = [_get_token_index(op)] + left + right
+                                operand_stack.append(result)
+                    
+                    if operator_stack and operator_stack[-1] == '(':
+                        operator_stack.pop()
+                        if operator_stack and operator_stack[-1] in ['sin', 'cos', 'exp', 'log']:
+                            func = operator_stack.pop()
+                            if operand_stack:
+                                operand = operand_stack.pop()
+                                result = [_get_token_index(func)] + operand
+                                operand_stack.append(result)
+                        
+                elif token in ['sin', 'cos', 'exp', 'log']:
+                    operator_stack.append(token)
+                elif token in ['add', 'sub', 'mul', 'div']:
+                    while operator_stack and operator_stack[-1] != '(' and \
+                        _get_precedence(operator_stack[-1]) >= _get_precedence(token):
+                        op = operator_stack.pop()
+                        if len(operand_stack) >= 2:
+                            right = operand_stack.pop()
+                            left = operand_stack.pop()
+                            result = [_get_token_index(op)] + left + right
+                            operand_stack.append(result)
+                    operator_stack.append(token)
+                elif token.startswith('x') and token[1:].isdigit():  # 处理x1, x2等
+                    operand_stack.append([_get_token_index(token)])
+                elif token == 'const':  # 处理常数
+                    operand_stack.append([_get_token_index('const')])
+                else:
+                    raise ValueError(f"Invalid token: {token}")
+                
+                i += 1
+            
+            while operator_stack:
+                op = operator_stack.pop()
+                if op != '(':
+                    if op in ['add', 'sub', 'mul', 'div']:
+                        if len(operand_stack) >= 2:
+                            right = operand_stack.pop()
+                            left = operand_stack.pop()
+                            result = [_get_token_index(op)] + left + right
+                            operand_stack.append(result)
+                    else:
+                        if operand_stack:
+                            operand = operand_stack.pop()
+                            result = [_get_token_index(op)] + operand
+                            operand_stack.append(result)
+            
+            if operand_stack:
+                return operand_stack[0]
+            return []
+
+        def _get_precedence(op):
+            precedences = {
+                'mul': 2, 'div': 2,
+                'add': 1, 'sub': 1,
+                'sin': 3, 'cos': 3, 'exp': 3, 'log': 3
+            }
+            return precedences.get(op, 0)
+
+        expr_str = expr_str.strip()
+        tokens = _tokenize(expr_str)
+        print(f"Tokens after tokenize: {tokens}")
+        
+        program_tokens = _parse(tokens)
+        print(f"Program tokens after parse: {program_tokens}")
+        
+        tokens = np.array(program_tokens, dtype=np.int32)
+        print(f"Final tokens array: {tokens}")
+        
+        return from_tokens(tokens)
+
     @cached_property
     def r(self):
         """Evaluates and returns the reward of the program"""
@@ -600,3 +754,4 @@ def convert_to_sympy(node):
         convert_to_sympy(child)
 
     return node
+

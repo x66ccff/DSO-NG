@@ -306,7 +306,7 @@ class RNNPolicy(Policy):
             Or a batch
         """
         if self.sample_novel_batch:
-            actions, obs, priors = self.sample_novel(n)
+            actions, obs, priors = self.sample_novel(n)      # KK TODO
         else:
             feed_dict = {self.batch_size : n}
             actions, obs, priors = self.sess.run(
@@ -314,7 +314,7 @@ class RNNPolicy(Policy):
 
         return actions, obs, priors
 
-    def sample_novel(self, n: int):
+    def sample_novel(self, n: int):                                       #  # KK TODO 定义RNN的策略的地方，RNN如何产生新的表达式样本的
         """Sample a batch of n expressions not contained in cache.
 
         If unable to do so within self.max_attempts_at_novel_batch,

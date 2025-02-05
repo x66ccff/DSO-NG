@@ -5,6 +5,8 @@ import json
 import time
 from itertools import compress
 
+import sympy as sp
+
 import tensorflow as tf
 import numpy as np
 
@@ -219,9 +221,34 @@ class Trainer():
 
             try:
                 df_pf = self.logger.get_df_pf()
-                print(df_pf)
+                print(df_pf[["expression","complexity","r","nmse_test"]])
+                pf_expressions = df_pf["expression"].tolist()
+                print("pf_expressions")
+                print(pf_expressions)
             except IndexError as e:
                 print("No available df pf.")
+            
+            
+            test_expressions = [
+                # 这些应该会抛出错误
+                # "(x+1)",  # 使用了不明确的x
+                # "0.5*x1",  # 如果library中没有const会报错
+
+                # 这些应该正常工作
+                # "(x1+x2)",
+                "(x1*x1)",
+                "(((x1)*(x1))+(sin(x1)))",
+                # 如果library有const：
+                # "(x1+1)",
+                # "(0.5*x1)",
+            ]
+
+            for expr in test_expressions:
+                print(expr)
+                result = Program.from_bracket_string(expr)
+                print(f"{expr} -> {result}")
+            # expr_kk = Program.from_bracket_string("(((x)*(x))+(sin(x)))")
+            # print("expr_kk", expr_kk)
 
         # Number of extra samples generated during attempt to get
         # batch_size new samples
@@ -235,7 +262,7 @@ class Trainer():
         # Shape of priors: (batch_size, max_length, n_choices)
         if override is None:
             # Sample batch of Programs from the Controller
-            actions, obs, priors = self.policy.sample(self.batch_size)
+            actions, obs, priors = self.policy.sample(self.batch_size) ################## 这个应该是RNN的样本出来的地方，关键应该是这个 sample函数
             programs = [from_tokens(a) for a in actions]            
         else:
             # Train on the given batch of Programs
