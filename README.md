@@ -46,6 +46,7 @@ pip install "numpy<=1.19" Cython
 pip install --upgrade setuptools pip
 export CFLAGS="-I $(python -c "import numpy; print(numpy.get_include())") $CFLAGS" # Needed on Mac to prevent fatal error: 'numpy/arrayobject.h' file not found
 pip install -e ./dso # Install DSO package and core dependencies
+pip install protobuf==3.20.*
 ```
 
 The `regression` task is installed by default. It doesn't require any of the installation options below.
@@ -61,6 +62,7 @@ To install all dependencies for all tasks, use the `all` option:
 
 ```
 pip install -e ./dso[all]
+pip install protobuf==3.20.*
 ```
 
 # Getting started

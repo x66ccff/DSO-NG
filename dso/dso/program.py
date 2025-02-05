@@ -511,7 +511,7 @@ class Program(object):
         print("\tInvalid: {}".format(self.invalid))
         print("\tTraversal: {}".format(self))
         if self.task.task_type != 'binding':
-            print("\tExpression:") 
+            print("\tExpression:")  # TODO KK 这里可以访问到最优表达式， 这个地方可以接入PSRN前向 #########################
             print("{}\n".format(indent(self.pretty(), '\t  ')))
 
     def __repr__(self):

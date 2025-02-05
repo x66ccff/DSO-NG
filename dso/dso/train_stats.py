@@ -359,9 +359,9 @@ class StatsLogger():
             eval_keys = list(results[0][-1].keys())
             columns = ["complexity", "r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
             pf_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
-            df = pd.DataFrame(pf_results, columns=columns)
+            df = pd.DataFrame(pf_results, columns=columns)    ######## TODO KK 这里可以获得 pf ##################################
             if self.pf_output_file is not None:
-                print("Saving Pareto Front to {}".format(self.pf_output_file))
+                print("Saving Pareto Front to {}".format(self.pf_output_file)) 
                 df.to_csv(self.pf_output_file, header=True, index=False)
 
             # Look for a success=True case within the Pareto front
@@ -399,6 +399,79 @@ class StatsLogger():
         result['n_samples'] = n_samples
         result['n_cached'] = len(Program.cache)
         return result
+
+    def get_df_pf(self):
+        # First of all, saves any pending buffer
+        self.flush_buffers()
+
+        if self.save_all_iterations:
+            # Check if all batches are the same size
+            batch_sizes = np.array([batch.shape[0] for batch in self.all_r])
+            if np.all(batch_sizes == batch_sizes[0]):
+                all_r_padded = self.all_r
+            else:
+                max_batch_size = np.max([batch.shape[0] for batch in self.all_r])
+                all_r_padded = []
+                for batch in self.all_r:
+                    n_pad = max_batch_size - batch.shape[0]
+                    all_r_padded.append(np.pad(
+                        batch, pad_width=(0,n_pad), mode='constant',
+                        constant_values=-np.inf))
+            #Kept all_r numpy file for backwards compatibility.
+            with open(self.all_r_output_file, 'ab') as f:
+                all_r = np.array(all_r_padded, dtype=np.float32)
+                np.save(f, all_r)
+
+        result = {}
+
+        # Save the hall of fame
+        if self.hof is not None and self.hof > 0:
+            assert not Program.task.stochastic, "HOF only supported for deterministic Tasks."
+            programs = list(Program.cache.values())  # All unique Programs found during training
+            r = [p.r for p in programs]
+            i_hof = np.argsort(r)[-self.hof:][::-1]  # Indices of top hof Programs
+            hof = [programs[i] for i in i_hof]
+
+            # if pool is not None:
+            #     results = pool.map(hof_work, hof)
+            # else:
+            results = list(map(hof_work, hof))
+
+            eval_keys = list(results[0][-1].keys())
+            columns = ["r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
+            hof_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
+            df = pd.DataFrame(hof_results, columns=columns)
+            # if self.hof_output_file is not None:
+                # print("Saving Hall of Fame to {}".format(self.hof_output_file))
+                # df.to_csv(self.hof_output_file, header=True, index=False)
+
+        # Save cache
+        if self.save_cache and Program.cache:
+            # print("Saving cache to {}".format(self.cache_output_file))
+            cache_data = [(repr(p), p.on_policy_count, p.off_policy_count, p.r) for p in Program.cache.values()]
+            df_cache = pd.DataFrame(cache_data)
+            df_cache.columns = ["str", "count_on_policy", "count_off_policy", "r"]
+            if self.save_cache_r_min is not None:
+                df_cache = df_cache[df_cache["r"] >= self.save_cache_r_min]
+                
+        # Compute the pareto front
+        if self.save_pareto_front:
+
+            assert not Program.task.stochastic, "Pareto front only supported for deterministic Tasks."
+
+            all_programs = list(Program.cache.values())
+            costs = np.array([(p.complexity, -p.r) for p in all_programs])
+            pareto_efficient_mask = is_pareto_efficient(costs)  # List of bool
+            pf = list(compress(all_programs, pareto_efficient_mask))
+            pf.sort(key=lambda p: p.complexity) # Sort by complexity
+
+            results = list(map(pf_work, pf))
+
+            eval_keys = list(results[0][-1].keys())
+            columns = ["complexity", "r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
+            pf_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
+            df = pd.DataFrame(pf_results, columns=columns)    ######## TODO KK 这里可以获得 pf ##################################
+            return df    
 
     def write_token_count(self, programs):
         token_counter = {token: 0 for token in Program.library.names}

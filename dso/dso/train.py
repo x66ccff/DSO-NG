@@ -215,8 +215,13 @@ class Trainer():
 
         start_time = time.time()
         if self.verbose:
-            print("-- RUNNING ITERATIONS START -------------")
+            print("-- RUNNING ITERATIONS START -------------") # KKTODO
 
+            try:
+                df_pf = self.logger.get_df_pf()
+                print(df_pf)
+            except IndexError as e:
+                print("No available df pf.")
 
         # Number of extra samples generated during attempt to get
         # batch_size new samples
@@ -419,7 +424,7 @@ class Trainer():
             # Print new best expression
             if self.verbose or self.debug:
                 print("[{}] Training iteration {}, current best R: {:.4f}".format(get_duration(start_time), self.iteration + 1, self.r_best))
-                print("\n\t** New best")
+                print("\n\t** New best (in train.py)")
                 self.p_r_best.print_stats()
 
         # Collect sub-batch statistics and write output
