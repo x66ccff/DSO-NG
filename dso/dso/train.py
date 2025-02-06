@@ -58,7 +58,7 @@ variables_name = ['x1']
 n_down_sample = 20
 n_inputs = 5
 
-topk = 1000
+topk = 20
 seed = 0
 experiment_name = "_"
 
@@ -643,20 +643,31 @@ class Trainer():
         print("flag", flag)
         X = X.real
         
-        print("X",X)
-        print("Y",Y)
-        
+
         X = torch.from_numpy(X).to(device)
         Y = torch.from_numpy(Y).to(device)
 
         psrn_model.current_expr_ls = expr_ls
         
         
-        expr_ls, _ = psrn_model.get_best_expr_and_MSE_topk(X, Y, 20)
+        expr_ls, _ = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
         print("expr_ls", expr_ls)
         # X
         # y
         
+        extra_psrn_programs = []
+        for e_str in expr_ls:
+            print("converting:", e_str)
+            e_psrn_program = Program.from_bracket_string(e_str)
+            print("get:", e_psrn_program)
+            extra_psrn_programs.append(e_psrn_program)
+            
+        
+        
+        
+        n_psrn_extra = len(extra_psrn_programs)
+        
+        programs = programs[:-topk] + extra_psrn_programs
         
         ###############################################################################################################
 
@@ -678,7 +689,7 @@ class Trainer():
                 priors = np.concatenate([priors, self.policy.extended_batch[3]])
                 programs = programs + extra_programs
 
-        self.nevals += self.batch_size + n_extra
+        self.nevals += self.batch_size + n_extra + n_psrn_extra
 
         # Run GP seeded with the current batch, returning elite samples
         if self.gp_controller is not None:

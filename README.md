@@ -47,6 +47,8 @@ pip install --upgrade setuptools pip
 export CFLAGS="-I $(python -c "import numpy; print(numpy.get_include())") $CFLAGS" # Needed on Mac to prevent fatal error: 'numpy/arrayobject.h' file not found
 pip install -e ./dso # Install DSO package and core dependencies
 pip install protobuf==3.20.*
+conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 -c pytorch
+conda install mkl==2024.0
 ```
 
 The `regression` task is installed by default. It doesn't require any of the installation options below.

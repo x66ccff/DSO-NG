@@ -454,11 +454,44 @@ class Program(object):
             except ValueError:
                 return False
         
+        def _expand_power(base, power):
+            # 将x1**n转换为x1*x1*...*x1
+            if not isinstance(power, int) or power < 1:
+                raise ValueError(f"Power must be positive integer, got {power}")
+            if power == 1:
+                return base
+            result = base
+            for _ in range(power - 1):
+                result = ['mul'] + result + base
+            return result
+        
+        def _expand_multiply(var, times):
+            # 将n*x1转换为x1+x1+...+x1
+            if not isinstance(times, int) or times < 1:
+                raise ValueError(f"Multiplier must be positive integer, got {times}")
+            if times == 1:
+                return var
+            result = var
+            for _ in range(times - 1):
+                result = ['add'] + result + var
+            return result
+
+        def _convert_number_to_expr(num):
+            # 将数字转换为x1/x1的倍数
+            if num == 1:
+                return ['div', 'x1', 'x1']
+            else:
+                # 例如3转换为(x1+x1+x1)/(x1)
+                numerator = ['x1']
+                for _ in range(int(num) - 1):
+                    numerator = ['add'] + numerator + ['x1']
+                return ['div', numerator, 'x1']
+
         def _tokenize(s):
-            # 检查是否支持const
             has_const = 'const' in Program.library.names
             
-            # 预处理运算符
+            # 预处理乘方操作
+            s = s.replace('**', ' ^ ')  # 将**替换为^以便处理
             s = s.replace('+', ' add ').replace('-', ' sub ') \
                 .replace('*', ' mul ').replace('/', ' div ')
             s = s.replace('(', ' ( ').replace(')', ' ) ')
@@ -472,35 +505,71 @@ class Program(object):
                         tokens.append(current_token)
                         current_token = ''
                 elif s[i] == 'x' and i + 1 < len(s) and s[i+1].isdigit():
-                    # 处理x1, x2等变量
                     current_token = 'x' + s[i+1]
                     tokens.append(current_token)
                     current_token = ''
-                    i += 1  # 跳过数字
+                    i += 1
                 else:
                     current_token += s[i]
                 i += 1
-                
+                    
             if current_token:
                 tokens.append(current_token)
             
-            # 过滤空tokens并进行检查
+            # 处理tokens
             result = []
-            for token in tokens:
-                token = token.strip()
+            i = 0
+            while i < len(tokens):
+                token = tokens[i].strip()
                 if not token:
+                    i += 1
                     continue
                     
                 if token == 'x':
                     raise ValueError("Ambiguous variable 'x' found. Please use x1, x2, etc.")
+                
+                # 处理乘方操作
+                if token == '^' and i > 0 and i + 1 < len(tokens):
+                    base = result.pop()  # 移除之前添加的基数
+                    power = tokens[i + 1]
+                    if _is_number(power):
+                        if has_const:
+                            result.append(base)
+                            result.append('^')
+                            result.append(power)
+                        else:
+                            # 展开为重复乘法
+                            power_val = int(float(power))
+                            expanded = _expand_power([base], power_val)
+                            result.extend(expanded)
+                        i += 2
+                        continue
+                    
+                # 处理乘法操作
+                if token == 'mul' and i + 1 < len(tokens):
+                    next_token = tokens[i + 1].strip()
+                    if _is_number(next_token) and not has_const:
+                        if i > 0 and result:
+                            prev_token = result[-1]
+                            result.pop()  # 移除之前的token
+                            # 展开为重复加法
+                            times = int(float(next_token))
+                            expanded = _expand_multiply([prev_token], times)
+                            result.extend(expanded)
+                            i += 2
+                            continue
                     
                 if _is_number(token):
                     if not has_const:
-                        raise ValueError("Constants are not supported in current library")
-                    result.append('const')
+                        num_val = int(float(token))
+                        converted = _convert_number_to_expr(num_val)
+                        result.extend(converted)
+                    else:
+                        result.append('const')
                 else:
                     result.append(token)
-                    
+                i += 1
+            
             return result
 
         def _parse(tokens):
@@ -512,6 +581,12 @@ class Program(object):
             while i < len(tokens):
                 token = tokens[i]
                 
+                # 如果token是列表,说明是已经处理好的数字表达式
+                if isinstance(token, list):
+                    operand_stack.append([_get_token_index(t) for t in token])
+                    i += 1
+                    continue
+                    
                 if token == '(':
                     operator_stack.append(token)
                 elif token == ')':
@@ -545,7 +620,7 @@ class Program(object):
                             result = [_get_token_index(op)] + left + right
                             operand_stack.append(result)
                     operator_stack.append(token)
-                elif token.startswith('x') and token[1:].isdigit():  # 处理x1, x2等
+                elif isinstance(token, str) and token.startswith('x') and token[1:].isdigit():  # 处理x1, x2等
                     operand_stack.append([_get_token_index(token)])
                 elif token == 'const':  # 处理常数
                     operand_stack.append([_get_token_index('const')])

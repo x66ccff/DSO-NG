@@ -286,52 +286,23 @@ class PSRN(nn.Module):
 
     def get_best_expr_and_MSE_topk(self, X, Y, n_top):
 
-        X = torch.clamp(X, min=-1e5, max=1e5)  # 截断到[-100000, 100000]
-        Y = torch.clamp(Y, min=-1e5, max=1e5)  # 截断到[-100000, 100000]
-
 
         with torch.no_grad():
             sum_ = torch.zeros((1, self.out_dim), device=self.device)
             for i in range(X.shape[0]):
                 H = self.forward(X[i].reshape(1, -1))
                 diff = H - Y[i]
-                square = diff**2
+                square = diff ** 2
                 sum_ += square
             mean = sum_ / X.shape[0]
             mean = mean.reshape(-1)
 
-            print("X", X)
-            print("mean", mean)
-            # 诊断代码
-            print("张量形状:", mean.shape)
-            print("张量类型:", mean.dtype)
+            # replace all nan, -inf to inf
+            mean[torch.isnan(mean)] = float('inf')
+            mean[torch.isinf(mean)] = float('inf')
 
-            # 安全地获取有效值的掩码
-            valid_mask = ~(torch.isnan(mean) | torch.isinf(mean))
-            valid_count = valid_mask.sum().item()
-            print("有效值数量:", valid_count)
-
-            # 如果有效值太多，只取一个小的样本来查看
-            if valid_count > 0:
-                valid_indices = torch.where(valid_mask)[0][:1000]  # 只取前1000个有效值
-                sample_values = mean[valid_indices]
-                print("部分有效值样本:", sample_values[:10])  # 只打印前10个
-
-            # 修改后的代码
-            mean_copy = mean.clone()
-            valid_mask = ~(torch.isnan(mean_copy) | torch.isinf(mean_copy))
-
-            if valid_mask.any():
-                # 获取有效值的最大值作为填充值
-                fill_value = mean_copy[valid_mask].max().item() + 1.0
-            else:
-                fill_value = 1e9
-
-            # 替换无效值
-            mean_copy[~valid_mask] = fill_value
-
-            # 执行 topk
-            values, indices = torch.topk(mean_copy, n_top, largest=False, sorted=True)
+            
+            values, indices = torch.topk(mean, n_top, largest=False, sorted=True)
             
             MSE_min_ls = values.tolist()
 
