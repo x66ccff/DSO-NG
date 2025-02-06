@@ -313,9 +313,9 @@ class PSRN(nn.Module):
 
             for i in tqdm(indices.tolist()):
                 expr_best_ls.append(self.get_expr(round(i)))
-            print("expr_best_ls:")
-            print("-" * 20)
-            for expr in expr_best_ls:
-                print(expr)
-            print("-" * 20)
+            # print("expr_best_ls:")
+            # print("-" * 20)
+            # for expr in expr_best_ls:
+            #     print(expr)
+            # print("-" * 20)
             return expr_best_ls, MSE_min_ls

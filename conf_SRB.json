@@ -12,7 +12,8 @@
       // supported functions. Note "const" will add placeholder constants that
       // will be optimized within the training loop. This will considerably
       // increase runtime.
-      "function_set": ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "poly"],
+      // "function_set": ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "poly"],
+      "function_set": ["add", "sub", "mul", "div", "sin", "cos", "exp", "log"],
 
       // Metric to be used for the reward function. See regression.py for
       // supported metrics.

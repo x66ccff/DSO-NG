@@ -54,7 +54,6 @@ print(operators)
 # operators = eval(operators)
 # print(operators)
 
-variables_name = ['x1']
 n_down_sample = 20
 n_inputs = 5
 
@@ -368,7 +367,7 @@ class Trainer():
         print("pf_expressions")
         print(pf_expressions)
         
-        variables_name = ["x1"]
+        variables_name = ["x{}".format(i+1) for i in range(Program.task.X_train.shape[1])]
         use_float_const = False
         n_psrn_tokens = 5
         n_sample_variables = min(2, len(variables_name))
@@ -624,13 +623,16 @@ class Trainer():
             
             gs_X = []
             for g in g_list:
-                # try:
-                g_sympy = se_sympify(g)
-                # except RuntimeError:
-                #     g_sympy = sp.S("1")
-                g_X = expr_to_Y_pred(g_sympy, X, variables)  # -> [n, 1]
+                try:
+                    g_sympy = se_sympify(g)
+                except RuntimeError as e:
+                    g_sympy = sp.S("1")
+
+                g_X = expr_to_Y_pred(g_sympy, X, variables_name)  # -> [n, 1]
                 gs_X.append(g_X)
 
+            # print("g_list", g_list)
+            # print("gs_X", gs_X)
             gs_X = np.hstack(gs_X)
             # keep safe, np.nan or np.inf -> 0
             gs_X[np.isnan(gs_X)] = 0
