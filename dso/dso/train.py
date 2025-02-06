@@ -34,7 +34,6 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 # Set TensorFlow seed
 tf.set_random_seed(0)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str(1)
 
 import torch
 # from model.regressor import PSRN_Regressor
@@ -42,13 +41,10 @@ from dso.PTS.model.regressor import PSRN_Regressor
 from dso.PTS.utils.data import expr_to_Y_pred
 from dso.PTS.model.models import PSRN
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str(1)
-
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-operators = ['Add','Mul','SemiSub','SemiDiv','Identity','Sin','Cos','Exp','Log']
+operators = ['Add','Mul','SemiSub','SemiDiv','Identity','Neg','Inv','Sin','Cos','Exp','Log','Pow3']
 
 print(operators)
 # operators = eval(operators)
