@@ -441,6 +441,8 @@ class Program(object):
 
     @classmethod
     def from_bracket_string(cls, expr_str):
+        
+        
         def _get_token_index(token_name):
             try:
                 return Program.library.names.index(token_name.lower())

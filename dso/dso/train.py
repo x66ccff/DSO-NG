@@ -5,11 +5,18 @@ import json
 import time
 import itertools  # 
 from itertools import compress
-
+import threading
 
 import sympy as sp
 import torch
 import random
+
+from threading import Thread, Lock
+import queue
+import time
+import heapq
+import torch
+import numpy as np
 
 
 # 主要改动点：
@@ -85,6 +92,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 
+
 path_log = "./log/custom_data/" + experiment_name + "/"
 
 if not os.path.exists(path_log):
@@ -95,6 +103,189 @@ sum_time = 0
 
 psrn_model = PSRN(n_variables=n_inputs, operators=operators, n_symbol_layers=3, dr_mask=None, device="cuda")
 print(psrn_model)
+
+
+class PSRNCache:
+    def __init__(self, capacity=100):
+        self.df_pf = None
+        self.best_expressions = []  # (MSE, expr) pairs
+        self.capacity = capacity
+        self.lock = Lock()
+        
+    def update_df_pf(self, new_df):
+        with self.lock:
+            self.df_pf = new_df
+            
+    def get_cached_df_pf(self):
+        with self.lock:
+            return self.df_pf
+            
+    def update_best_expressions(self, mse, expr):
+        with self.lock:
+            if len(self.best_expressions) < self.capacity:
+                heapq.heappush(self.best_expressions, (mse, expr))
+            else:
+                if mse < -self.best_expressions[0][0]:
+                    heapq.heappushpop(self.best_expressions, (mse, expr))
+                
+    def get_best_expressions(self, top_n):
+        with self.lock:
+            return sorted(self.best_expressions)[:top_n]
+
+def psrn_worker(cache, psrn_model, Program, visited_set, device, stop_event):
+    def break_down_expr(symbols_sympy, n_tokens):
+        now_chosen_token = None
+        tokens = []
+        use_set = True
+
+        symbols_sympy += (
+            [e.expand() for e in symbols_sympy]
+            + [e.together() for e in symbols_sympy]
+            + [e.powsimp() for e in symbols_sympy]
+            + [e.radsimp() for e in symbols_sympy]
+        )
+
+        for expr in symbols_sympy:
+            subexpr = get_last_subexprs(expr)
+            for e in subexpr:
+                if e.count_ops() < 10:
+                    tokens.append(e)
+        tokens = list(set(tokens))
+
+        from collections import Counter
+
+        token_counts = Counter(tokens)
+        all_tokens = list(token_counts.keys())
+        frequencies = list(token_counts.values())
+        tokens_freq = list(zip(all_tokens, frequencies))
+
+        n_try = 0
+        keep_try = True
+        while keep_try:
+            n_try += 1
+            if n_try > MAX_LEN_SET:
+                keep_try = False
+            if len(all_tokens) > n_tokens:
+                sampled_tokens = []
+                n_try_2 = 0
+                while len(sampled_tokens) < n_tokens:
+                    n_try_2 += 1
+                    if n_try_2 > MAX_LEN_SET:
+                        sampled_tokens = random.choices(
+                            all_tokens, weights=frequencies, k=n_tokens
+                        )
+                        break
+                    if random.random() < SAMPLE_PROB:
+                        if random.random() < SAMPLE_PROB_CROSS_VAR:
+                            chosen_token = sp.S(
+                                generate_cross_variable(variables_name, 1)[0]
+                            )
+                        else:
+                            now_chosen_token = sp.S(sample_const(use_float_const))
+                    else:
+                        now_chosen_token = sp.S(
+                            random.choices(
+                                [token for token, freq in tokens_freq],
+                                weights=[freq for token, freq in tokens_freq],
+                                k=1,
+                            )[0]
+                        )
+
+                    if now_chosen_token is None:
+                        continue
+                    if (
+                        not (not use_float_const and "." in str(now_chosen_token))
+                        and str(now_chosen_token) not in variables_name
+                        and not has_large_integer(now_chosen_token)
+                    ):
+                        if now_chosen_token not in sampled_tokens:
+                            sampled_tokens.append(now_chosen_token)
+            else:
+                sampled_constants_num = n_tokens - len(tokens)
+                sampled_constants = [
+                    sample_const(use_float_const)
+                    for i in range(sampled_constants_num)
+                ]
+                sampled_tokens = tokens + sampled_constants
+
+            sampled_tokens = [str(t) for t in sampled_tokens]
+
+            if use_set:
+                sampled_set = set(sampled_tokens)
+                if len(sampled_set) != len(set(sampled_tokens + variables_name)) - len(
+                    variables_name
+                ):
+                    continue
+
+                if str(sampled_set) not in visited_set:
+                    visited_set.add(str(sampled_set))
+                    return sampled_tokens
+                else:
+                    continue
+            else:
+                return sampled_tokens
+
+        return sampled_tokens
+
+    orginal_X = Program.task.X_train
+    orginal_Y = Program.task.y_train
+    variables_name = [f"x{i+1}" for i in range(Program.task.X_train.shape[1])]
+    
+    while not stop_event.is_set():
+        df_pf = cache.get_cached_df_pf()
+        if df_pf is None:
+            time.sleep(1)
+            continue
+            
+        try:
+            with torch.no_grad():
+                pf_expressions = df_pf["expression"].tolist()
+                pf_expressions = [e for e in pf_expressions if len(str(e)) < 200]
+                
+                use_float_const = False
+                n_psrn_tokens = 5
+                n_sample_variables = min(2, len(variables_name))
+                n_tokens = n_psrn_tokens - n_sample_variables
+                
+                break_down_tokens = break_down_expr(
+                    [sp.S(expr) for expr in pf_expressions], 
+                    n_tokens
+                )
+                
+                sampled_variables = random.sample(variables_name, n_sample_variables)
+                psrn_input_tokens = sampled_variables + break_down_tokens
+                random.shuffle(psrn_input_tokens)
+                
+                sampled_idx = np.unique(
+                    np.random.choice(
+                        orginal_X.shape[0],
+                        size=min(n_down_sample, orginal_X.shape[0]),
+                        replace=False,
+                    )
+                )
+                
+                Y = orginal_Y[sampled_idx]
+                flag, X = get_gs_X(psrn_input_tokens, variables_name, orginal_X[sampled_idx])
+                X = X.real
+                
+                X = torch.from_numpy(X).to(device)
+                Y = torch.from_numpy(Y).to(device)
+
+                psrn_model.current_expr_ls = psrn_input_tokens
+                print("psrn in:",psrn_model.current_expr_ls)
+                expr_ls, MSE_ls = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
+                print("psrn out:",expr_ls[:3])
+                print("psrn out:",MSE_ls[:3])
+                
+                for expr, mse in zip(expr_ls, MSE_ls):
+                    cache.update_best_expressions(mse, expr)
+                
+        except Exception as e:
+            print(f"Error in PSRN worker: {e}")
+            time.sleep(1)
+            
+        time.sleep(0.1)
+
 
 visited_set = set()
 global_start_time = time.time()
@@ -510,182 +701,48 @@ class Trainer():
         use_psrn = True
         n_psrn_extra = 0
         
-        
+
         if use_psrn:
-            
             print("PSRN start!")
-            df_pf = self.logger.get_df_pf() ################# 这一步特别耗时
-            print(df_pf[["expression","complexity","r","nmse_test"]])
-            pf_expressions = df_pf["expression"].tolist()
-            print("pf_expressions")
-            print(pf_expressions)
             
-            pf_expressions = [e for e in pf_expressions if len(str(e)) < 200]
+            # 初始化缓存和控制信号
+            cache = PSRNCache()
+            stop_event = threading.Event()
             
-            variables_name = ["x{}".format(i+1) for i in range(Program.task.X_train.shape[1])]
-            use_float_const = False
-            n_psrn_tokens = 5
-            n_sample_variables = min(2, len(variables_name))
-            
-            n_tokens = n_psrn_tokens - n_sample_variables
-            
-            def break_down_expr(symbols_sympy, n_tokens):
-                now_chosen_token = None
-                tokens = []
-                use_set = True
-
-                symbols_sympy += (
-                    [e.expand() for e in symbols_sympy]
-                    + [e.together() for e in symbols_sympy]
-                    + [e.powsimp() for e in symbols_sympy]
-                    + [e.radsimp() for e in symbols_sympy]
-                )
-
-                for expr in symbols_sympy:
-                    subexpr = get_last_subexprs(expr)
-                    for e in subexpr:
-                        if e.count_ops() < 10:
-                            tokens.append(e)
-                tokens = list(set(tokens))
-
-                from collections import Counter
-
-                token_counts = Counter(tokens)
-                all_tokens = list(token_counts.keys())
-                frequencies = list(token_counts.values())
-                tokens_freq = list(zip(all_tokens, frequencies))
-
-                n_try = 0
-                keep_try = True
-                while keep_try:
-
-                    n_try += 1
-                    if n_try > MAX_LEN_SET:
-                        keep_try = False
-                    if len(all_tokens) > n_tokens:
-                        sampled_tokens = []
-                        cnt_cross_variables = 0
-
-                        n_try_2 = 0
-                        while len(sampled_tokens) < n_tokens:
-                            n_try_2 += 1
-                            if n_try_2 > MAX_LEN_SET:
-                                sampled_tokens = random.choices(
-                                    all_tokens, weights=frequencies, k=n_tokens
-                                )
-                                break
-                            if random.random() < SAMPLE_PROB:
-                                if random.random() < SAMPLE_PROB_CROSS_VAR:
-                                    chosen_token = sp.S(
-                                        generate_cross_variable(variables_name, 1)[0]
-                                    )
-                                else:
-                                    now_chosen_token = sp.S(sample_const(use_float_const))
-                            else:
-                                now_chosen_token = sp.S(
-                                    random.choices(
-                                        [token for token, freq in tokens_freq],
-                                        weights=[freq for token, freq in tokens_freq],
-                                        k=1,
-                                    )[0]
-                                )
-
-                            
-                            if now_chosen_token is None:
-                                continue
-                            if (
-                                not (not use_float_const and "." in str(now_chosen_token))
-                                and str(now_chosen_token) not in variables_name
-                                and not has_large_integer(now_chosen_token)
-                            ):
-                                if now_chosen_token not in sampled_tokens:
-                                    sampled_tokens.append(now_chosen_token)
-                                else:
-                                    print('#!', end='')
-                                    pass
-                            else:
-                                print('#!', end='')
-                                pass
-                    else:
-                        sampled_constants_num = n_tokens - len(tokens)
-                        sampled_constants = [
-                            sample_const(use_float_const)
-                            for i in range(sampled_constants_num)
-                        ]
-                        # print('sampled_constants',sampled_constants)
-                        sampled_tokens = tokens + sampled_constants
-
-                    # print('sampled_tokens',sampled_tokens)
-                    sampled_tokens = [str(t) for t in sampled_tokens]
-
-                    if use_set:
-                        sampled_set = set(sampled_tokens)
-                        if len(sampled_set) != len(set(sampled_tokens + variables_name)) - len(
-                            variables_name
-                        ):
-                            continue
-
-                        if str(sampled_set) not in visited_set:
-                            visited_set.add(str(sampled_set))
-                            return sampled_tokens
-                        else:
-                            continue
-                    else:
-                        return sampled_tokens
-
-                return sampled_tokens
-
-            break_down_tokens = break_down_expr([sp.S(expr) for expr in pf_expressions], n_tokens)
-            print("break_down_tokens", break_down_tokens) # ['sin(x1)', '2', 'x1**2']
-            # psrn_model 
-            
-            sampled_variables = random.sample(variables_name, n_sample_variables)
-
-            psrn_input_tokens = sampled_variables + break_down_tokens
-            random.shuffle(psrn_input_tokens)
-
-            expr_ls = psrn_input_tokens
-            
-            
-            
-            orginal_X = Program.task.X_train
-            orginal_Y = Program.task.y_train
-            
-            sampled_idx = np.unique(
-                np.random.choice(
-                    orginal_X.shape[0],
-                    size=min(n_down_sample, orginal_X.shape[0]),
-                    replace=False,
-                )
+            # 启动PSRN工作线程
+            psrn_thread = Thread(
+                target=psrn_worker, 
+                args=(cache, psrn_model, Program, visited_set, device, stop_event)
             )
+            psrn_thread.daemon = True
+            psrn_thread.start()
             
-
-            Y = orginal_Y[sampled_idx]
-            # print("expr_ls", expr_ls, "variables", variables_name)
-            flag, X = get_gs_X(expr_ls, variables_name, orginal_X[sampled_idx])
-            # print("flag", flag)
-            X = X.real
+            # 获取并更新df_pf
+            df_pf = self.logger.get_df_pf()
+            print(df_pf[["expression","complexity","r","nmse_test"]])
+            cache.update_df_pf(df_pf)
             
-
-            X = torch.from_numpy(X).to(device)
-            Y = torch.from_numpy(Y).to(device)
-
-            psrn_model.current_expr_ls = expr_ls
+            # 等待PSRN处理一段时间
+            processing_time = 20  # 可以调整等待时间
+            print(f"Processing PSRN for {processing_time} seconds...")
+            time.sleep(processing_time)
             
+            # 获取最终结果
+            best_results = cache.get_best_expressions(topk)
             
-            expr_ls, MSE_ls = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
-
+            # 停止PSRN工作线程
+            stop_event.set()
+            psrn_thread.join(timeout=1)
+            
+            # 转换为Program对象
             extra_psrn_programs = []
-            for e_str in expr_ls:
+            for mse, expr in best_results:
                 try:
-                    # print("converting:", e_str)
-                    e_psrn_program = Program.from_bracket_string(e_str)
-                    # print("get:", e_psrn_program)
-                    extra_psrn_programs.append(e_psrn_program)
+                    program = Program.from_bracket_string(expr)
+                    extra_psrn_programs.append(program)
                 except Exception as e:
-                    print("expr {} convert failed! in from_bracket_string".format(e_str))
-                
-        
+                    print(f"expr {expr} convert failed! in from_bracket_string")
+            
             n_psrn_extra = len(extra_psrn_programs)
             if n_psrn_extra > 0:
                 programs = programs[:-n_psrn_extra] + extra_psrn_programs
