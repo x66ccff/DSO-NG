@@ -1,4 +1,4 @@
-# Next Generation Deep Symbolic Optimization
+# Next Generation Deep Symbolic Optimization. (uDSR + PSRN)
 
 <p align="center">
 <img src="images/banner.png" width=750/>
