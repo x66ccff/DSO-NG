@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+import pandas as pd
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 
@@ -42,7 +43,8 @@ class DeepSymbolicRegressor(DeepSymbolicOptimizer,
         return self
 
     def predict(self, X):
-
+        
         check_is_fitted(self, "program_")
-
+        if isinstance(X, pd.DataFrame):
+            X = X.values
         return self.program_.execute(X)

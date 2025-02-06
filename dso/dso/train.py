@@ -45,10 +45,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 operators = ['Add','Mul','SemiSub','SemiDiv','Identity','Neg','Inv','Sin','Cos','Exp','Log','Pow3']
+time_limit = 60 # seconds
+# time_limit = 40*60 # seconds
+
 
 print(operators)
 # operators = eval(operators)
 # print(operators)
+import time
 
 n_down_sample = 20
 n_inputs = 5
@@ -869,7 +873,14 @@ class Trainer():
                                self.iteration, b, iteration_walltime,
                                self.nevals, controller_programs,
                                positional_entropy, top_samples_per_batch)
+        
+        now_time = time.time()
+        time_diff = now_time - start_time
+        print("now time {:.2f} / time_limit {:.2f}".format(time_diff, time_limit))
 
+        if time_diff > time_limit:
+            print("[{}] Reach time limit! ".format(get_duration(start_time)))
+            self.done = True
 
         # Stop if early stopping criteria is met
         if self.early_stopping and self.p_r_best.evaluate.get("success"):
