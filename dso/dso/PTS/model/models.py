@@ -306,7 +306,7 @@ class PSRN(nn.Module):
             
             MSE_min_ls = values.tolist()
 
-            print("indices", indices)
+            # print("indices", indices)
 
             expr_best_ls = []
             from tqdm import tqdm

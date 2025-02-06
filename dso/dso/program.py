@@ -658,13 +658,13 @@ class Program(object):
 
         expr_str = expr_str.strip()
         tokens = _tokenize(expr_str)
-        print(f"Tokens after tokenize: {tokens}")
+        # print(f"Tokens after tokenize: {tokens}")
         
         program_tokens = _parse(tokens)
-        print(f"Program tokens after parse: {program_tokens}")
+        # print(f"Program tokens after parse: {program_tokens}")
         
         tokens = np.array(program_tokens, dtype=np.int32)
-        print(f"Final tokens array: {tokens}")
+        # print(f"Final tokens array: {tokens}")
         
         return from_tokens(tokens)
 

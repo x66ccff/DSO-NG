@@ -595,7 +595,7 @@ class Trainer():
         
         
         
-        print("expr_ls", expr_ls)
+        # print("expr_ls", expr_ls)
 
         sampled_idx = np.unique(
             np.random.choice(
@@ -638,9 +638,9 @@ class Trainer():
             return success, gs_X
     
         Y = orginal_Y[sampled_idx]
-        print("expr_ls", expr_ls, "variables", variables_name)
+        # print("expr_ls", expr_ls, "variables", variables_name)
         flag, X = get_gs_X(expr_ls, variables_name, orginal_X[sampled_idx])
-        print("flag", flag)
+        # print("flag", flag)
         X = X.real
         
 
@@ -651,23 +651,27 @@ class Trainer():
         
         
         expr_ls, _ = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
-        print("expr_ls", expr_ls)
+        # print("expr_ls", expr_ls)
         # X
         # y
         
         extra_psrn_programs = []
         for e_str in expr_ls:
-            print("converting:", e_str)
-            e_psrn_program = Program.from_bracket_string(e_str)
-            print("get:", e_psrn_program)
-            extra_psrn_programs.append(e_psrn_program)
+            try:
+                # print("converting:", e_str)
+                e_psrn_program = Program.from_bracket_string(e_str)
+                # print("get:", e_psrn_program)
+                extra_psrn_programs.append(e_psrn_program)
+            except Exception as e:
+                print("expr {} convert failed! in from_bracket_string".format(e_str))
             
         
         
         
         n_psrn_extra = len(extra_psrn_programs)
-        
-        programs = programs[:-topk] + extra_psrn_programs
+        if n_psrn_extra > 0:
+            programs = programs[:-n_psrn_extra] + extra_psrn_programs
+            
         
         ###############################################################################################################
 
