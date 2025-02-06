@@ -2,11 +2,11 @@ from dso import DeepSymbolicRegressor
 import numpy as np
 # Generate some data
 np.random.seed(0)
-X = np.random.random((10, 2))
-y = np.sin(X[:,0]) + X[:,1] ** 2
+X = np.random.random((75000, 5))
+y = np.sin(X[:,0]) + X[:,1]*3 / np.exp(X[:,0] ** 4)
 
 # Create the model
-model = DeepSymbolicRegressor("./conf_SRB.json") # Alternatively, you can pass in your own config JSON path
+model = DeepSymbolicRegressor("./conf_SRB_gp.json") # Alternatively, you can pass in your own config JSON path
 
 # Fit the model
 model.fit(X, y) # Should solve in ~10 seconds

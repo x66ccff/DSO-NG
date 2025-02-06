@@ -45,8 +45,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 operators = ['Add','Mul','SemiSub','SemiDiv','Identity','Neg','Inv','Sin','Cos','Exp','Log','Pow3']
-time_limit = 60 # seconds
-# time_limit = 40*60 # seconds
+time_limit = 60*60 # seconds
+# time_limit = 3*60 # seconds
 
 
 print(operators)
@@ -54,14 +54,14 @@ print(operators)
 # print(operators)
 import time
 
-n_down_sample = 20
+n_down_sample = 10
 n_inputs = 5
 
 topk = 20
 seed = 0
 experiment_name = "_"
 
-use_constant = False
+use_constant = True
 
 hp = {
     "operators": operators,
@@ -89,7 +89,7 @@ path_log = "./log/custom_data/" + experiment_name + "/"
 
 if not os.path.exists(path_log):
     os.makedirs(path_log)
-
+psrn_cnt = 0
 cnt_success = 0
 sum_time = 0
 
@@ -97,7 +97,144 @@ psrn_model = PSRN(n_variables=n_inputs, operators=operators, n_symbol_layers=3, 
 print(psrn_model)
 
 visited_set = set()
+global_start_time = time.time()
+
+
+def get_gs_X(g_list, variables, X):
+
+    # from utils.data import expr_to_Y_pred
     
+
+    """get the base expressions' data (gs)
+
+    Args:
+        g_list (list): _description_
+        variables (list): _description_
+        X (np.ndarray): _description_
+
+    Returns:
+        Tuple[bool, np.ndarray]: success flag and gs_X array (n, n_gs), where n_gs == len(g_list)
+    """
+    success = False
+    
+    gs_X = []
+    for g in g_list:
+        try:
+            g_sympy = se_sympify(g)
+        except RuntimeError as e:
+            g_sympy = sp.S("1")
+
+        g_X = expr_to_Y_pred(g_sympy, X, variables)  # -> [n, 1]
+        gs_X.append(g_X)
+
+    # print("g_list", g_list)
+    # print("gs_X", gs_X)
+    gs_X = np.hstack(gs_X)
+    # keep safe, np.nan or np.inf -> 0
+    gs_X[np.isnan(gs_X)] = 0
+    gs_X[np.isinf(gs_X)] = 0
+    return success, gs_X
+    
+
+
+def get_max_depth(expr):
+    def traverse(subexpr, current_depth):
+        max_depth = current_depth
+        for arg in subexpr.args:
+            max_depth = max(max_depth, traverse(arg, current_depth + 1))
+        return max_depth
+
+    return traverse(expr, 0)
+
+def get_subexpressions_at_depth(expr, depth):
+    if depth == 0:
+        return [expr]
+
+    subexprs = []
+
+    def traverse(subexpr, current_depth):
+        if current_depth == depth:
+            subexprs.append(subexpr)
+        else:
+            for arg in subexpr.args:
+                traverse(arg, current_depth + 1)
+
+    traverse(expr, 0)
+    return subexprs
+
+def sample_const(use_float_const):
+    CONST_LB = -5
+    CONST_UB = 5
+    EXTRA_CONST = ["pi"]
+    use_extra_const = False
+    if use_float_const:
+        return round(random.uniform(CONST_LB, CONST_UB), 1)
+    else:
+        CONST_LIST = np.linspace(
+            CONST_LB, CONST_UB, CONST_UB - CONST_LB + 1
+        ).tolist()
+        CONST_LIST = [x for x in CONST_LIST if x != 0]
+        if use_extra_const:
+            CONST_LIST.extend(EXTRA_CONST)
+        return random.choice(CONST_LIST)
+    
+def generate_cross_variable(variables, n_sample):
+    operations = ["*", "+", "/"]
+    all_combinations = list(itertools.combinations_with_replacement(variables, 2))
+    if len(all_combinations) < n_sample:
+        n_sample = len(all_combinations)
+
+    sampled_combinations = random.sample(all_combinations, n_sample)
+    cross_variables = []
+
+    for var1, var2 in sampled_combinations:
+        op = random.choice(operations)
+        if var1 == var2:
+            if op == "/":
+                cross_variables.append(f"{var1}")
+            else:
+                cross_variables.append(f"{var1}{op}{var1}")
+        elif op == "/" and random.random() < 0.5:
+            cross_variables.append(f"{var2}{op}{var1}")
+        else:
+            cross_variables.append(f"{var1}{op}{var2}")
+
+    # print('cross_variables:',cross_variables)
+    return cross_variables
+            
+def get_last_subexprs(expr, depth=4):
+    max_depth = get_max_depth(expr)
+    # print(f"Maximum depth of expr1: {max_depth}")
+
+    ret = []
+    for d in range(0, max_depth + 1):
+        subexprs = get_subexpressions_at_depth(expr, d)
+        # print(f"Depth {d}: {subexprs}")
+        if max_depth - d < depth:
+            ret.extend(subexprs)
+    ret = list(set(ret))
+    ret.sort(key=lambda x: x.count_ops())
+    return ret
+
+def has_large_integer(expr):
+    if isinstance(expr, str):
+        expr = sp.S(expr)
+    for atom in expr.atoms():
+        if isinstance(atom, sp.Integer) and abs(int(atom)) > MAX_INTEGER:
+            return True
+        if isinstance(atom, sp.Rational) and (
+            abs(atom.p) > MAX_INTEGER or abs(atom.q) > MAX_INTEGER
+        ):
+            return True
+
+    return False
+
+MAX_LEN_SET = 200
+SAMPLE_PROB = 0.5
+SAMPLE_PROB_CROSS_VAR = 0.5
+MAX_INTEGER = 10
+
+
 # Work for multiprocessing pool: compute reward
 def work(p):
     """Compute reward and return it with optimized constants"""
@@ -357,324 +494,207 @@ class Trainer():
         ############################################################### 应该在这里应用 PSRN， #################### KK TODO
 
         # print(actions, obs, priors)
-        # print('actions', 'obs', 'priors')
+        # print('actions', 'obs', 'priors')\
+            
+        if isinstance(Program.task.X_train, pd.DataFrame):
+            Program.task.X_train = Program.task.X_train.values
+            Program.task.X_test = Program.task.X_test.values
+            Program.task.y_train = Program.task.y_train.values
+            Program.task.y_test = Program.task.y_test.values
+            
         print("Program.task.X_train", Program.task.X_train.shape)
         print("Program.task.y_train", Program.task.y_train.shape)
 
-        df_pf = self.logger.get_df_pf()
-        print(df_pf[["expression","complexity","r","nmse_test"]])
-        pf_expressions = df_pf["expression"].tolist()
-        print("pf_expressions")
-        print(pf_expressions)
         
-        variables_name = ["x{}".format(i+1) for i in range(Program.task.X_train.shape[1])]
-        use_float_const = False
-        n_psrn_tokens = 5
-        n_sample_variables = min(2, len(variables_name))
-        # 转 sympy -> PTS 帕累托前沿分析 -> PTS 前向得到括号表达式 -> from from_bracket_string -> Program 完成！
-        n_tokens = n_psrn_tokens - n_sample_variables
+        global psrn_cnt
+        use_psrn = True
+        n_psrn_extra = 0
         
-        def break_down_expr(symbols_sympy, n_tokens):
-            now_chosen_token = None
-            tokens = []
-            use_set = True
-            MAX_LEN_SET = 1000
-            SAMPLE_PROB = 0.5
-            SAMPLE_PROB_CROSS_VAR = 0.5
-            MAX_INTEGER = 10
-            def get_max_depth(expr):
-                def traverse(subexpr, current_depth):
-                    max_depth = current_depth
-                    for arg in subexpr.args:
-                        max_depth = max(max_depth, traverse(arg, current_depth + 1))
-                    return max_depth
-
-                return traverse(expr, 0)
+        
+        if use_psrn:
             
-            def get_subexpressions_at_depth(expr, depth):
-                if depth == 0:
-                    return [expr]
-
-                subexprs = []
-
-                def traverse(subexpr, current_depth):
-                    if current_depth == depth:
-                        subexprs.append(subexpr)
-                    else:
-                        for arg in subexpr.args:
-                            traverse(arg, current_depth + 1)
-
-                traverse(expr, 0)
-                return subexprs
+            print("PSRN start!")
+            df_pf = self.logger.get_df_pf() ################# 这一步特别耗时
+            print(df_pf[["expression","complexity","r","nmse_test"]])
+            pf_expressions = df_pf["expression"].tolist()
+            print("pf_expressions")
+            print(pf_expressions)
             
-            def sample_const(use_float_const):
-                CONST_LB = -5
-                CONST_UB = 5
-                EXTRA_CONST = ["pi"]
-                use_extra_const = False
-                if use_float_const:
-                    return round(random.uniform(CONST_LB, CONST_UB), 1)
-                else:
-                    CONST_LIST = np.linspace(
-                        CONST_LB, CONST_UB, CONST_UB - CONST_LB + 1
-                    ).tolist()
-                    CONST_LIST = [x for x in CONST_LIST if x != 0]
-                    if use_extra_const:
-                        CONST_LIST.extend(EXTRA_CONST)
-                    return random.choice(CONST_LIST)
-                
-            def generate_cross_variable(variables, n_sample):
-                operations = ["*", "+", "/"]
-                all_combinations = list(itertools.combinations_with_replacement(variables, 2))
-                if len(all_combinations) < n_sample:
-                    n_sample = len(all_combinations)
-
-                sampled_combinations = random.sample(all_combinations, n_sample)
-                cross_variables = []
-
-                for var1, var2 in sampled_combinations:
-                    op = random.choice(operations)
-                    if var1 == var2:
-                        if op == "/":
-                            cross_variables.append(f"{var1}")
-                        else:
-                            cross_variables.append(f"{var1}{op}{var1}")
-                    elif op == "/" and random.random() < 0.5:
-                        cross_variables.append(f"{var2}{op}{var1}")
-                    else:
-                        cross_variables.append(f"{var1}{op}{var2}")
-
-                # print('cross_variables:',cross_variables)
-                return cross_variables
-                        
-            def get_last_subexprs(expr, depth=4):
-                max_depth = get_max_depth(expr)
-                # print(f"Maximum depth of expr1: {max_depth}")
-
-                ret = []
-                for d in range(0, max_depth + 1):
-                    subexprs = get_subexpressions_at_depth(expr, d)
-                    # print(f"Depth {d}: {subexprs}")
-                    if max_depth - d < depth:
-                        ret.extend(subexprs)
-                ret = list(set(ret))
-                ret.sort(key=lambda x: x.count_ops())
-                return ret
+            pf_expressions = [e for e in pf_expressions if len(str(e)) < 200]
             
-            def has_large_integer(expr):
-                if isinstance(expr, str):
-                    expr = sp.S(expr)
-                for atom in expr.atoms():
-                    if isinstance(atom, sp.Integer) and abs(int(atom)) > MAX_INTEGER:
-                        return True
-                    if isinstance(atom, sp.Rational) and (
-                        abs(atom.p) > MAX_INTEGER or abs(atom.q) > MAX_INTEGER
-                    ):
-                        return True
+            variables_name = ["x{}".format(i+1) for i in range(Program.task.X_train.shape[1])]
+            use_float_const = False
+            n_psrn_tokens = 5
+            n_sample_variables = min(2, len(variables_name))
+            
+            n_tokens = n_psrn_tokens - n_sample_variables
+            
+            def break_down_expr(symbols_sympy, n_tokens):
+                now_chosen_token = None
+                tokens = []
+                use_set = True
 
-                return False
+                symbols_sympy += (
+                    [e.expand() for e in symbols_sympy]
+                    + [e.together() for e in symbols_sympy]
+                    + [e.powsimp() for e in symbols_sympy]
+                    + [e.radsimp() for e in symbols_sympy]
+                )
 
+                for expr in symbols_sympy:
+                    subexpr = get_last_subexprs(expr)
+                    for e in subexpr:
+                        if e.count_ops() < 10:
+                            tokens.append(e)
+                tokens = list(set(tokens))
 
-            symbols_sympy += (
-                [e.expand() for e in symbols_sympy]
-                + [e.together() for e in symbols_sympy]
-                + [e.powsimp() for e in symbols_sympy]
-                + [e.radsimp() for e in symbols_sympy]
-            )
+                from collections import Counter
 
-            for expr in symbols_sympy:
-                subexpr = get_last_subexprs(expr)
-                for e in subexpr:
-                    if e.count_ops() < 10:
-                        tokens.append(e)
-            tokens = list(set(tokens))
+                token_counts = Counter(tokens)
+                all_tokens = list(token_counts.keys())
+                frequencies = list(token_counts.values())
+                tokens_freq = list(zip(all_tokens, frequencies))
 
-            from collections import Counter
+                n_try = 0
+                keep_try = True
+                while keep_try:
 
-            token_counts = Counter(tokens)
-            all_tokens = list(token_counts.keys())
-            frequencies = list(token_counts.values())
-            tokens_freq = list(zip(all_tokens, frequencies))
+                    n_try += 1
+                    if n_try > MAX_LEN_SET:
+                        keep_try = False
+                    if len(all_tokens) > n_tokens:
+                        sampled_tokens = []
+                        cnt_cross_variables = 0
 
-            n_try = 0
-            keep_try = True
-            while keep_try:
-
-                n_try += 1
-                if n_try > MAX_LEN_SET:
-                    keep_try = False
-                if len(all_tokens) > n_tokens:
-                    sampled_tokens = []
-                    cnt_cross_variables = 0
-
-                    n_try_2 = 0
-                    while len(sampled_tokens) < n_tokens:
-                        n_try_2 += 1
-                        if n_try_2 > MAX_LEN_SET:
-                            sampled_tokens = random.choices(
-                                all_tokens, weights=frequencies, k=n_tokens
-                            )
-                            break
-                        if random.random() < SAMPLE_PROB:
-                            if random.random() < SAMPLE_PROB_CROSS_VAR:
-                                chosen_token = sp.S(
-                                    generate_cross_variable(variables_name, 1)[0]
+                        n_try_2 = 0
+                        while len(sampled_tokens) < n_tokens:
+                            n_try_2 += 1
+                            if n_try_2 > MAX_LEN_SET:
+                                sampled_tokens = random.choices(
+                                    all_tokens, weights=frequencies, k=n_tokens
                                 )
+                                break
+                            if random.random() < SAMPLE_PROB:
+                                if random.random() < SAMPLE_PROB_CROSS_VAR:
+                                    chosen_token = sp.S(
+                                        generate_cross_variable(variables_name, 1)[0]
+                                    )
+                                else:
+                                    now_chosen_token = sp.S(sample_const(use_float_const))
                             else:
-                                now_chosen_token = sp.S(sample_const(use_float_const))
-                        else:
-                            now_chosen_token = sp.S(
-                                random.choices(
-                                    [token for token, freq in tokens_freq],
-                                    weights=[freq for token, freq in tokens_freq],
-                                    k=1,
-                                )[0]
-                            )
+                                now_chosen_token = sp.S(
+                                    random.choices(
+                                        [token for token, freq in tokens_freq],
+                                        weights=[freq for token, freq in tokens_freq],
+                                        k=1,
+                                    )[0]
+                                )
 
-                        
-                        if now_chosen_token is None:
-                            continue
-                        if (
-                            not (not use_float_const and "." in str(now_chosen_token))
-                            and str(now_chosen_token) not in variables_name
-                            and not has_large_integer(now_chosen_token)
-                        ):
-                            if now_chosen_token not in sampled_tokens:
-                                sampled_tokens.append(now_chosen_token)
+                            
+                            if now_chosen_token is None:
+                                continue
+                            if (
+                                not (not use_float_const and "." in str(now_chosen_token))
+                                and str(now_chosen_token) not in variables_name
+                                and not has_large_integer(now_chosen_token)
+                            ):
+                                if now_chosen_token not in sampled_tokens:
+                                    sampled_tokens.append(now_chosen_token)
+                                else:
+                                    print('#!', end='')
+                                    pass
                             else:
-                                # print('#!', end='')
+                                print('#!', end='')
                                 pass
-                        else:
-                            # print('#!', end='')
-                            pass
-                else:
-                    sampled_constants_num = n_tokens - len(tokens)
-                    sampled_constants = [
-                        sample_const(use_float_const)
-                        for i in range(sampled_constants_num)
-                    ]
-                    # print('sampled_constants',sampled_constants)
-                    sampled_tokens = tokens + sampled_constants
-
-                # print('sampled_tokens',sampled_tokens)
-                sampled_tokens = [str(t) for t in sampled_tokens]
-
-                if use_set:
-                    sampled_set = set(sampled_tokens)
-                    if len(sampled_set) != len(set(sampled_tokens + variables_name)) - len(
-                        variables_name
-                    ):
-                        continue
-
-                    if str(sampled_set) not in visited_set:
-                        visited_set.add(str(sampled_set))
-                        return sampled_tokens
                     else:
-                        continue
-                else:
-                    return sampled_tokens
+                        sampled_constants_num = n_tokens - len(tokens)
+                        sampled_constants = [
+                            sample_const(use_float_const)
+                            for i in range(sampled_constants_num)
+                        ]
+                        # print('sampled_constants',sampled_constants)
+                        sampled_tokens = tokens + sampled_constants
 
-            return sampled_tokens
+                    # print('sampled_tokens',sampled_tokens)
+                    sampled_tokens = [str(t) for t in sampled_tokens]
 
-        break_down_tokens = break_down_expr([sp.S(expr) for expr in pf_expressions], n_tokens)
-        print("break_down_tokens", break_down_tokens) # ['sin(x1)', '2', 'x1**2']
-        # psrn_model 
-        
-        sampled_variables = random.sample(variables_name, n_sample_variables)
+                    if use_set:
+                        sampled_set = set(sampled_tokens)
+                        if len(sampled_set) != len(set(sampled_tokens + variables_name)) - len(
+                            variables_name
+                        ):
+                            continue
 
-        psrn_input_tokens = sampled_variables + break_down_tokens
-        random.shuffle(psrn_input_tokens)
+                        if str(sampled_set) not in visited_set:
+                            visited_set.add(str(sampled_set))
+                            return sampled_tokens
+                        else:
+                            continue
+                    else:
+                        return sampled_tokens
 
-        expr_ls = psrn_input_tokens
-        
-        
-        
-        orginal_X = Program.task.X_train
-        orginal_Y = Program.task.y_train
-        
-        
-        
-        # print("expr_ls", expr_ls)
+                return sampled_tokens
 
-        sampled_idx = np.unique(
-            np.random.choice(
-                orginal_X.shape[0],
-                size=min(n_down_sample, orginal_X.shape[0]),
-                replace=False,
+            break_down_tokens = break_down_expr([sp.S(expr) for expr in pf_expressions], n_tokens)
+            print("break_down_tokens", break_down_tokens) # ['sin(x1)', '2', 'x1**2']
+            # psrn_model 
+            
+            sampled_variables = random.sample(variables_name, n_sample_variables)
+
+            psrn_input_tokens = sampled_variables + break_down_tokens
+            random.shuffle(psrn_input_tokens)
+
+            expr_ls = psrn_input_tokens
+            
+            
+            
+            orginal_X = Program.task.X_train
+            orginal_Y = Program.task.y_train
+            
+            sampled_idx = np.unique(
+                np.random.choice(
+                    orginal_X.shape[0],
+                    size=min(n_down_sample, orginal_X.shape[0]),
+                    replace=False,
+                )
             )
-        )
-        
-        def get_gs_X(g_list, variables, X):
-
-            # from utils.data import expr_to_Y_pred
             
 
-            """get the base expressions' data (gs)
-
-            Args:
-                g_list (list): _description_
-                variables (list): _description_
-                X (np.ndarray): _description_
-
-            Returns:
-                Tuple[bool, np.ndarray]: success flag and gs_X array (n, n_gs), where n_gs == len(g_list)
-            """
-            success = False
+            Y = orginal_Y[sampled_idx]
+            # print("expr_ls", expr_ls, "variables", variables_name)
+            flag, X = get_gs_X(expr_ls, variables_name, orginal_X[sampled_idx])
+            # print("flag", flag)
+            X = X.real
             
-            gs_X = []
-            for g in g_list:
+
+            X = torch.from_numpy(X).to(device)
+            Y = torch.from_numpy(Y).to(device)
+
+            psrn_model.current_expr_ls = expr_ls
+            
+            
+            expr_ls, MSE_ls = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
+
+            extra_psrn_programs = []
+            for e_str in expr_ls:
                 try:
-                    g_sympy = se_sympify(g)
-                except RuntimeError as e:
-                    g_sympy = sp.S("1")
-
-                g_X = expr_to_Y_pred(g_sympy, X, variables_name)  # -> [n, 1]
-                gs_X.append(g_X)
-
-            # print("g_list", g_list)
-            # print("gs_X", gs_X)
-            gs_X = np.hstack(gs_X)
-            # keep safe, np.nan or np.inf -> 0
-            gs_X[np.isnan(gs_X)] = 0
-            gs_X[np.isinf(gs_X)] = 0
-            return success, gs_X
-    
-        Y = orginal_Y[sampled_idx]
-        # print("expr_ls", expr_ls, "variables", variables_name)
-        flag, X = get_gs_X(expr_ls, variables_name, orginal_X[sampled_idx])
-        # print("flag", flag)
-        X = X.real
+                    # print("converting:", e_str)
+                    e_psrn_program = Program.from_bracket_string(e_str)
+                    # print("get:", e_psrn_program)
+                    extra_psrn_programs.append(e_psrn_program)
+                except Exception as e:
+                    print("expr {} convert failed! in from_bracket_string".format(e_str))
+                
         
-
-        X = torch.from_numpy(X).to(device)
-        Y = torch.from_numpy(Y).to(device)
-
-        psrn_model.current_expr_ls = expr_ls
-        
-        
-        expr_ls, _ = psrn_model.get_best_expr_and_MSE_topk(X, Y, topk)
-        # print("expr_ls", expr_ls)
-        # X
-        # y
-        
-        extra_psrn_programs = []
-        for e_str in expr_ls:
-            try:
-                # print("converting:", e_str)
-                e_psrn_program = Program.from_bracket_string(e_str)
-                # print("get:", e_psrn_program)
-                extra_psrn_programs.append(e_psrn_program)
-            except Exception as e:
-                print("expr {} convert failed! in from_bracket_string".format(e_str))
+            n_psrn_extra = len(extra_psrn_programs)
+            if n_psrn_extra > 0:
+                programs = programs[:-n_psrn_extra] + extra_psrn_programs
             
-        
-        
-        
-        n_psrn_extra = len(extra_psrn_programs)
-        if n_psrn_extra > 0:
-            programs = programs[:-n_psrn_extra] + extra_psrn_programs
+            print("PSRN finished!")
+        else:
+            print("not using PSRN")
             
-        
+            psrn_cnt += 1
         ###############################################################################################################
 
 
@@ -697,6 +717,9 @@ class Trainer():
 
         self.nevals += self.batch_size + n_extra + n_psrn_extra
 
+        print("Run GP seeded ...")
+
+
         # Run GP seeded with the current batch, returning elite samples
         if self.gp_controller is not None:
             deap_programs, deap_actions, deap_obs, deap_priors = self.gp_controller(actions)
@@ -718,6 +741,9 @@ class Trainer():
             obs = np.append(obs, deap_obs, axis=0)
             priors = np.append(priors, deap_priors, axis=0)
 
+        print("Compute rewards in parallel...")
+
+
         # Compute rewards in parallel
         if self.pool is not None:
             # Filter programs that need reward computing
@@ -727,17 +753,29 @@ class Trainer():
             # Make sure to update cache with new programs
             Program.cache.update(pool_p_dict)
 
+        print("Compute rewards...")
+
+
         # Compute rewards (or retrieve cached rewards)
         r = np.array([p.r for p in programs])
 
+        print("Back up program...")
+
+
         # Back up programs to save them properly later
         controller_programs = programs.copy() if self.logger.save_token_count else None
+
+        print("Need for Vanilla Policy..")
+
 
         # Need for Vanilla Policy Gradient (epsilon = null)
         l           = np.array([len(p.traversal) for p in programs])
         s           = [p.str for p in programs] # Str representations of Programs
         on_policy   = np.array([p.originally_on_policy for p in programs])
         invalid     = np.array([p.invalid for p in programs], dtype=bool)
+
+        print("self.logger.save_position...")
+
 
         if self.logger.save_positional_entropy:
             positional_entropy = np.apply_along_axis(empirical_entropy, 0, actions)
@@ -759,6 +797,7 @@ class Trainer():
 
 
 
+        print("Apply risk-seeking policy...")
 
 
         """
@@ -866,6 +905,9 @@ class Trainer():
                 print("\n\t** New best (in train.py)")
                 self.p_r_best.print_stats()
 
+        # print("self.logger.save_stats...")
+
+
         # Collect sub-batch statistics and write output
         self.logger.save_stats(r_full, l_full, actions_full, s_full,
                                invalid_full, r, l, actions, s, s_history,
@@ -875,15 +917,16 @@ class Trainer():
                                positional_entropy, top_samples_per_batch)
         
         now_time = time.time()
-        time_diff = now_time - start_time
+        time_diff = now_time - global_start_time
         print("now time {:.2f} / time_limit {:.2f}".format(time_diff, time_limit))
 
         if time_diff > time_limit:
-            print("[{}] Reach time limit! ".format(get_duration(start_time)))
+            print("[{}] Reach global_start_time limit! ".format(get_duration(global_start_time)))
             self.done = True
 
         # Stop if early stopping criteria is met
-        if self.early_stopping and self.p_r_best.evaluate.get("success"):
+        
+        if self.early_stopping and self.p_r_best is not None and self.p_r_best.evaluate.get("success"):
             print("[{}] Early stopping criteria met; breaking early.".format(get_duration(start_time)))
             self.done = True
 

@@ -21,7 +21,10 @@ class DeepSymbolicRegressor(DeepSymbolicOptimizer,
         DeepSymbolicOptimizer.__init__(self, config)
 
     def fit(self, X, y):
-
+        if isinstance(X, pd.DataFrame):
+            X = X.values        
+        if isinstance(y, pd.DataFrame):
+            y = y.values
         # Update the Task
         config = deepcopy(self.config)
         config["task"]["dataset"] = (X, y)

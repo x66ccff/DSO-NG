@@ -184,6 +184,8 @@ class RegressionTask(HierarchicalTask):
             self.poly_optimizer = PolyOptimizer(**poly_optimizer_params)
 
     def reward_function(self, p, optimizing=False):
+        if isinstance(self.X_train, pd.DataFrame):
+            self.X_train = self.X_train.values
         # fit a polynomial if p contains a 'poly' token
         if p.poly_pos is not None:
             assert len(p.const_pos) == 0, "A program cannot contain 'poly' and 'const' tokens at the same time"
