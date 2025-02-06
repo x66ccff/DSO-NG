@@ -194,6 +194,10 @@ class RegressionTask(HierarchicalTask):
                 p.traversal[p.poly_pos] = self.poly_optimizer.fit(self.X_train, poly_data_y)
 
         # Compute estimated values
+        if isinstance(self.X_train, pd.DataFrame):
+            self.X_train = self.X_train.values
+            self.X_test = self.X_test.values
+            
         y_hat = p.execute(self.X_train)
 
         # For invalid expressions, return invalid_reward
