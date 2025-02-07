@@ -1,10 +1,10 @@
-# Deep Symbolic Optimization
+# Next Generation Deep Symbolic Optimization. (uDSR + PSRN)
 
 <p align="center">
 <img src="images/banner.png" width=750/>
 </p>
 
-Deep Symbolic Optimization (DSO) is a deep learning framework for symbolic optimization tasks. The package `dso` includes the core symbolic optimization algorithms, as well as support for two particular symbolic optimization tasks: (1) _symbolic regression_ (recovering tractable mathematical expressions from an input dataset) and (2) discovering _symbolic policies_ for reinforcement learning environments. In the code, these tasks are referred to as `regression` and `control`, respectively. We also include a simple interface for defining new tasks.
+Next Generation Deep Symbolic Optimization (DSO-NG) is a deep learning framework for symbolic optimization tasks. The package `dso` includes the core symbolic optimization algorithms, as well as support for two particular symbolic optimization tasks: (1) _symbolic regression_ (recovering tractable mathematical expressions from an input dataset) and (2) discovering _symbolic policies_ for reinforcement learning environments. In the code, these tasks are referred to as `regression` and `control`, respectively. We also include a simple interface for defining new tasks.
 
 On symbolic regression, DSO was benchmarked against the SRBench benchmark set and achieves state-of-the-art in both symbolic solution rate and accuracy solution rate:
 
@@ -12,21 +12,6 @@ On symbolic regression, DSO was benchmarked against the SRBench benchmark set an
 <img src="images/srbench_symbolic-solution.png" width=300/>
 <img src="images/srbench_accuracy-solution.png" width=300/>
 </p>
-
-DSO also won [1st place](https://cavalab.org/srbench/competition-2022/#real-world-track-rankings) in the Real-World Track of the 2022 SRBench Symbolic Regression Competition held at the GECCO 2022 conference.
-
-This repository contains code supporting the following publications:
-1. Petersen et al. 2021 **Deep symbolic regression: Recovering mathematical expressions from data via risk-seeking policy gradients.** *ICLR 2021.* [Oral](https://iclr.cc/virtual/2021/poster/2578) [Paper](https://openreview.net/forum?id=m5Qsh0kBQG)
-2. Landajuela et al. 2021 **Discovering symbolic policies with deep reinforcement learning.** *ICML 2021.* [Paper](https://proceedings.mlr.press/v139/landajuela21a.html)
-3. Mundhenk et al. 2021 **Symbolic Regression via Neural-Guided Genetic Programming Population Seeding.** *NeurIPS 2021* [Paper](https://proceedings.neurips.cc/paper/2021/hash/d073bb8d0c47f317dd39de9c9f004e9d-Abstract.html)
-4. Landajuela et al. 2022 **A Unified Framework for Deep Symbolic Regression.** *NeurIPS 2022* [Paper](https://openreview.net/forum?id=2FNnBhwJsHK)  
-5. Landajuela et al. 2021 **Improving exploration in policy gradient search: Application to symbolic optimization.** *Math-AI @ ICLR 2021.* [Paper](https://mathai-iclr.github.io/papers/papers/MATHAI_16_paper.pdf)
-6. Kim et al. 2020 **An interactive visualization platform for deep symbolic regression.** *IJCAI 2020.* [Paper](https://www.ijcai.org/Proceedings/2020/0763.pdf)
-7. Petersen et al. 2021 **Incorporating domain knowledge into neural-guided search via *in situ* priors and constraints** *AutoML @ ICML 2021.* [Paper]()
-8. Kim et al. 2021 **Distilling Wikipedia mathematical knowledge into neural network models.** *Math-AI @ ICLR 2021.* [Paper](https://mathai-iclr.github.io/papers/papers/MATHAI_15_paper.pdf)
-9. Silva et al. 2022 **Leveraging Language Models to Efficiently Learn Symbolic Optimization Solutions** *ALA Workshop 2022.* [Paper](https://ala2022.github.io/papers/ALA2022_paper_24.pdf)
-10. Glatt et al. 2022 **Deep Symbolic Optimization for Electric Component Sizing in Fixed Topology Power Converters** *AI for Design and Manufacturing (ADAM) @ AAAI 2022.* [Paper](https://openreview.net/forum?id=u_ghY9PnAyZ)
-11. Pettit et al. 2025 **DisCo-DSO: Coupling Discrete and Continuous Optimization for Efficient Generative Design in Hybrid Spaces.** *AAAI 2025* [Paper](https://arxiv.org/pdf/2412.11051) [Blog Post](https://landajuela.github.io/discrete_continuous_autoregressive/)
 
 # Installation
 
@@ -317,90 +302,6 @@ For example:
       }
   }
 ```
-
-# Policy optimizers
-
-DSO supports a variety of policy optimizers based the following objective structure:
-
-```math
-J(\theta) = \sum_{i=1}^N J(\tau; \theta) \text{ with } J(\tau; \theta) \propto \log(p(\tau|\theta)).
-```
-
-The objective can be specified by overriding the ``_set_up`` method of ``PolicyOptimizer``.
-Current DSO supports the following policy optimizers:
-
-## Policy gradient optimizers
-
-Given a batch $\mathcal{T} = \{\tau^{(i)}\}_{i=1}^N$ of designs such that $\tau^{(i)} \sim p( \cdot | \theta)\ \forall 1 \leq i \leq N$:
-
-```math
-\nabla_\theta J_\textrm{pg}(\theta; \varepsilon) \approx \frac{1}{\varepsilon N}\sum_{i=1}^N \left( R(\tau^{(i)}) - b \right) \cdot \mathbf{1}_{R(\tau^{(i)}) \geq \tilde{R}_\varepsilon(\theta) } 
-\nabla_\theta \log p(\tau^{(i)} | \theta)
-```
-where 
-```math
-\tilde{R}_\varepsilon(\theta) = \textrm{Q}_{1-\varepsilon}(\mathcal{T} ) 
-```
-(the empirical quantile). 
-
-### Vanilla policy gradient
-
-We take:
-
-```math
-b = \textrm{EWMA}_n \text{ with } \textrm{EWMA}(n) = \alpha  \bar{R} + (1 - \alpha) \textrm{EWMA}_{n-1} \text{ and }\bar{R}  = \frac{1}{N} \sum_{i=1}^N R(\tau)
-```
-```math
-\varepsilon = 1.0
-```
-Configuration:
-```
-   training.epsilon: 1.0,
-   training.baseline : "ewma_R",
-   policy_optimizer.policy_optimizer_type : "pg"
-```
-
-### Risk-seeking policy gradient
-
-```math
-b = \tilde{R}_\varepsilon(\theta)
-```
-```math
-\varepsilon = 0.05
-```
-Configuration:
-```
-   training.epsilon: 0.05,
-   training.baseline : "R_e",
-   policy_optimizer.policy_optimizer_type : "pg"
-```
- 
-## Priority queue training
-Given a maximum reward priority queue (MRPQ):
-```math
-\nabla_\theta J_\textrm{MRPQ}(\theta)= \frac{1}{k}\sum_{\tau\in\textrm{MRPQ}}\nabla_\theta \log p(\tau|\theta)
-```
-
-## Proximal policy optimization
-Given a batch $\mathcal{T} = \{\tau^{(i)}\}_{i=1}^N$ of designs such that $\tau^{(i)} \sim p( \cdot | \theta) \forall i$:
-
-For $1=1,\dots,K$ do: 
-```math
-\theta \leftarrow \theta + \alpha \nabla J_{\text{PPO}}
-```
-with
-```math
-J_{\text{PPO}} (\theta) =\mathbb{E}_{\tau \sim \mathcal{T}} [ \min (r(\theta) (R(\tau) - b), \text{clip}(r(\theta), 1-\epsilon, 1 + \epsilon) (R(\tau ) - b) ]
-```
-
-# Code dependency map
-
-<details>
-<summary>The map of core dependencies is depicted here.</summary>
-<p align="center">
-<img src="images/code_map.png" width=750/>
-</p>
-</details>
 
 
 # Citing this work
