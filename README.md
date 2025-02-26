@@ -36,6 +36,18 @@ conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 -c pytorch
 conda install mkl==2024.0
 ```
 
+
+or 
+
+
+```
+conda create --name dso_env python=3.7
+conda activate `dso_env`
+pip install "numpy<=1.19" Cython
+pip install -e ./dso
+pip install protobuf==3.20.*
+```
+
 The `regression` task is installed by default. It doesn't require any of the installation options below.
 
 ### Installation - `control` task
